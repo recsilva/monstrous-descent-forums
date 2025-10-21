@@ -23,60 +23,66 @@ const pool = new Pool({
 //AUTH
 app.post('/api/register', async (req, res) => {
   const { name, email, password } = req.body;
-  
+
+  if (!name || !email || !password) {
+    return res.status(400).json({ error: 'Name, email, and password are required' });
+  }
+
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    return res.status(400).json({ error: 'Invalid email format' });
+  }
+
+  if (password.length < 1) {
+    return res.status(400).json({ error: 'Password must be at least 1 character long' });
+  }
+
   try {
-    // Check if user already exists
-    const existing = await pool.query('SELECT * FROM users WHERE email = $1', [email]);
-    if (existing.rows.length > 0) {
-      return res.status(400).json({ error: 'User already exists' });
+    const existing = await pool.query('SELECT id FROM users WHERE email = $1', [email]);
+    if (existing.rowCount > 0) {
+      return res.status(409).json({ error: 'User already exists' }); // 409 Conflict
     }
-  }
-  catch(err){
-    res.status(500).json({ error: 'check failed' });
-  }
-    // Hash password
+
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(password, saltRounds);
-    try {
 
-    // Save new user
-    await pool.query(
-      'INSERT INTO users (name, email, password) VALUES ($1, $2, $3)',
+    const result = await pool.query(
+      'INSERT INTO users (name, email, password) VALUES ($1, $2, $3) RETURNING id, name, email',
       [name, email, hashedPassword]
     );
 
-    res.status(201).json({ message: 'User created' });
+    res.status(201).json({
+      message: 'User created successfully',
+      user: result.rows[0],
+    });
   } catch (err) {
-    console.error('Insert error:', err);
-    res.status(500).json({ error: 'insert failed' });
+    console.error('Registration error:', err);
+    res.status(500).json({ error: 'Failed to register user' });
   }
-});   
+});
+
 
 app.post('/api/login', async (req, res) => {
   const { email, password } = req.body;
 
   try {
-    // Find the user by email
     const result = await pool.query(
       'SELECT * FROM users WHERE email = $1 LIMIT 1',
       [email]
     );
 
     if (result.rows.length === 0) {
-      // Email not found
       return res.status(401).json({ success: false, message: 'Invalid email or password' });
     }
 
     const user = result.rows[0];
 
-    // Compare the provided password with the hashed password
     const passwordMatch = await bcrypt.compare(password, user.password);
 
     if (!passwordMatch) {
       return res.status(401).json({ success: false, message: 'Invalid email or password' });
     }
 
-    // Login successful
     return res.status(200).json({
       success: true,
       user: {
@@ -95,15 +101,33 @@ app.post('/api/login', async (req, res) => {
 
 app.put('/api/users/privileges', async (req, res) => {
   const { id, privileges } = req.body;
-  try {
-    await pool.query('UPDATE users SET privileges = $1 WHERE id = $2', [privileges, id]);
-    res.status(200).json({ success: true });
-    console.log("success")
-  } catch (err) {
-    res.status(500).json({ success: false, error: 'DB error' });
-    console.error("failure: ", res)
+
+  if (!id || !privileges) {
+    return res.status(400).json({ error: 'User ID and privileges are required' });
   }
-});   
+
+  try {
+    const userCheck = await pool.query('SELECT id FROM users WHERE id = $1', [id]);
+    if (userCheck.rowCount === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    const result = await pool.query(
+      'UPDATE users SET privileges = $1 WHERE id = $2 RETURNING id, privileges',
+      [privileges, id]
+    );
+
+    res.status(200).json({
+      success: true,
+      message: 'Privileges updated successfully',
+      user: result.rows[0],
+    });
+    console.log('Privileges updated for user:', id);
+  } catch (err) {
+    console.error('DB error updating privileges:', err);
+    res.status(500).json({ success: false, error: 'Database error' });
+  }
+});
+
 
 app.get('/api/users', async (req, res) => {
   try {
@@ -118,20 +142,69 @@ app.get('/api/users', async (req, res) => {
 app.put('/api/users/:id', async (req, res) => {
   const { id } = req.params;
   const { name, email, password } = req.body;
+
+  if (!name && !email && !password) {
+    return res.status(400).json({ error: 'At least one field (name, email, or password) is required' });
+  }
+
   try {
-    const result = await pool.query(
-      'UPDATE users SET name = $1, email = $2 WHERE id = $3 RETURNING id, name, email, privileges',
-      [name, email, id]
-    );
-    if (result.rows.length === 0) {
+    const userCheck = await pool.query('SELECT id FROM users WHERE id = $1', [id]);
+    if (userCheck.rowCount === 0) {
       return res.status(404).json({ error: 'User not found' });
     }
-    res.json(result.rows[0]);
+
+    const updates = [];
+    const values = [];
+    let valueIndex = 1;
+
+    if (name) {
+      updates.push(`name = $${valueIndex++}`);
+      values.push(name);
+    }
+
+
+    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ error: 'Invalid email format' });
+    }
+    if (email) {
+      updates.push(`email = $${valueIndex++}`);
+      values.push(email);
+    }
+
+    if (password) {
+      const saltRounds = 10;
+      const hashedPassword = await bcrypt.hash(password, saltRounds);
+      updates.push(`password = $${valueIndex++}`);
+      values.push(hashedPassword);
+    }
+
+    values.push(id);
+
+    const query = `
+      UPDATE users 
+      SET ${updates.join(', ')} 
+      WHERE id = $${valueIndex}
+      RETURNING id, name, email, privileges
+    `;
+
+    const result = await pool.query(query, values);
+
+    res.status(200).json({
+      message: 'User updated successfully',
+      user: result.rows[0],
+    });
+
   } catch (err) {
+    if (err.code === '23505') {
+      return res.status(409).json({ error: 'Email already in use' });
+    }
+
     console.error('Update user error:', err);
     res.status(500).json({ error: 'Failed to update user' });
   }
-});   
+});
+
 
 app.get('/api/posts/:id', async (req, res) => {
   const { id } = req.params;
@@ -172,48 +245,122 @@ app.get('/api/posts/:id', async (req, res) => {
 
 app.delete('/api/users/:id', async (req, res) => {
   const { id } = req.params;
+
   try {
     await pool.query('BEGIN');
+
+    const userCheck = await pool.query('SELECT id FROM users WHERE id = $1', [id]);
+    if (userCheck.rowCount === 0) {
+      await pool.query('ROLLBACK');
+      return res.status(404).json({ error: 'User not found' });
+    }
+
     await pool.query('DELETE FROM users WHERE id = $1', [id]);
     await pool.query('COMMIT');
-    res.status(200).json({ success: true });
+
+    res.sendStatus(204);
   } catch (err) {
-    await pool.query('ROLLBACK');
-    console.error('DB delete error:', err); // Log full error
-    res.status(500).json({ success: false, error: err.message });
+    try {
+      await pool.query('ROLLBACK');
+    } catch (rollbackErr) {
+      console.error('Rollback error:', rollbackErr);
+    }
+    console.error('DB delete error:', err);
+    res.status(500).json({ error: 'Failed to delete user' });
   }
-});   
+});
+ 
 
 //POSTS
 app.post('/api/post', async (req, res) => {
   const { title, content, userId } = req.body;
-  
+
+  if (!title || !content || !userId) {
+    return res.status(400).json({ error: 'Title, content, and userId are required' });
+  }
+  if (typeof title !== 'string' || typeof content !== 'string' || typeof userId !== 'number') {
+    return res.status(400).json({ error: 'Invalid data types for title, content, or userId' });
+  }
   try {
+    const userCheck = await pool.query('SELECT id FROM users WHERE id = $1', [userId]);
+    if (userCheck.rowCount === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
     const result = await pool.query(
-      'INSERT INTO posts (title, content, user_id) VALUES ($1, $2, $3) RETURNING *',
+      'INSERT INTO posts (title, content, user_id) VALUES ($1, $2, $3) RETURNING id, title, content, user_id, created_at',
       [title, content, userId]
     );
-    res.status(201).json(result.rows[0]);
+    res.status(201).json({
+      message: 'Post created successfully',
+      post: result.rows[0],
+    });
   } catch (err) {
-    console.error(err);
+    console.error('Failed to create post:', err);
+    if (err.code === '23503') {
+      return res.status(400).json({ error: 'Invalid userId — user does not exist' });
+    }
+
     res.status(500).json({ error: 'Failed to create post' });
   }
-});   
+});
+
 
 app.put('/api/posts/:id', async (req, res) => {
   const { id } = req.params;
   const { title, content } = req.body;
+
+  if (!id) {
+    return res.status(400).json({ error: 'Post ID is required in the URL' });
+  }
+
+  if (!title && !content) {
+    return res.status(400).json({ error: 'At least one of title or content must be provided' });
+  }
+
+  if (title.length < 1 || content.length < 1) {
+    return res.status(400).json({ error: 'Title must be at least 1 char long, content at least 1 char long' });
+  }
+
   try {
-    await pool.query(
-      'UPDATE posts SET title = $1, content = $2 WHERE id = $3',
-      [title, content, id]
-    );
-    res.status(200).json({ message: 'Post updated' });
+    const postCheck = await pool.query('SELECT id FROM posts WHERE id = $1', [id]);
+    if (postCheck.rowCount === 0) {
+      return res.status(404).json({ error: 'Post not found' });
+    }
+
+    const updates = [];
+    const values = [];
+    let valueIndex = 1;
+
+    if (title) {
+      updates.push(`title = $${valueIndex++}`);
+      values.push(title);
+    }
+    if (content) {
+      updates.push(`content = $${valueIndex++}`);
+      values.push(content);
+    }
+
+    values.push(id);
+
+    const query = `
+      UPDATE posts
+      SET ${updates.join(', ')}
+      WHERE id = $${valueIndex}
+      RETURNING id, title, content, user_id
+    `;
+
+    const result = await pool.query(query, values);
+
+    res.status(200).json({
+      message: 'Post updated successfully',
+      post: result.rows[0],
+    });
   } catch (err) {
-    console.error(err);
+    console.error('Error updating post:', err);
     res.status(500).json({ error: 'Failed to update post' });
   }
-});   
+});
+
 
 app.get('/api/posts', async (req, res) => {
   try {
@@ -241,57 +388,97 @@ app.get('/api/posts', async (req, res) => {
     res.json(posts);
   } catch (err) {
     console.error(err);
+    console.log(err);
     res.status(500).json({ error: 'Failed to fetch posts' });
   }
 });   
 
-app.delete('/api/post/:id', async (req, res) => {
-  const { id } = req.params; // Get id from URL parameter
-//   console.error(id);
+app.delete('/api/posts/:id', async (req, res) => {
+  const { id } = req.params;
+
   try {
     const result = await pool.query(
       'DELETE FROM posts WHERE id = $1 RETURNING *',
       [id]
     );
+
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Post not found' });
     }
-    res.status(200).json({ message: 'Post deleted' });
+
+    res.sendStatus(204);
   } catch (err) {
-    console.error(err);
+    console.error('Failed to delete post:', err);
     res.status(500).json({ error: 'Failed to delete post' });
   }
-});   
+});
+
 
 //COMMENTS
 app.post('/api/comment', async (req, res) => {
   const { content, postId, userId } = req.body;
+
+  if (!content || !postId || !userId) {
+    return res.status(400).json({ error: 'content, postId, and userId are required' });
+  }
+
   try {
+    const userCheck = await pool.query('SELECT id FROM users WHERE id = $1', [userId]);
+    if (userCheck.rowCount === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    const postCheck = await pool.query('SELECT id FROM posts WHERE id = $1', [postId]);
+    if (postCheck.rowCount === 0) {
+      return res.status(404).json({ error: 'Post not found' });
+    }
+
     const result = await pool.query(
       'INSERT INTO comments (content, post_id, user_id) VALUES ($1, $2, $3) RETURNING *',
       [content, postId, userId]
     );
+
     res.status(201).json(result.rows[0]);
   } catch (err) {
-    console.error(err);
+    console.error('Error creating comment:', err);
     res.status(500).json({ error: 'Failed to create comment' });
   }
-});  
+});
+
 
 app.put('/api/comments/:id', async (req, res) => {
   const { id } = req.params;
   const { content } = req.body;
+
+  if (!id) {
+    return res.status(400).json({ error: 'Comment ID is required in the URL' });
+  }
+
+  if (!content || typeof content !== 'string' || content.trim().length === 0) {
+    return res.status(400).json({ error: 'Valid comment content is required' });
+  }
+
   try {
-    await pool.query(
-      'UPDATE comments SET content = $1 WHERE id = $2',
+    const commentCheck = await pool.query('SELECT id FROM comments WHERE id = $1', [id]);
+    if (commentCheck.rowCount === 0) {
+      return res.status(404).json({ error: 'Comment not found' });
+    }
+
+    const result = await pool.query(
+      'UPDATE comments SET content = $1 WHERE id = $2 RETURNING id, content, post_id, user_id',
       [content, id]
     );
-    res.status(200).json({ message: 'Post updated' });
+
+    res.status(200).json({
+      message: 'Comment updated successfully',
+      comment: result.rows[0],
+    });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ error: 'Failed to update post' });
+    console.error('Error updating comment:', err);
+    res.status(500).json({ error: 'Failed to update comment' });
   }
-});  
+});
+
 
 app.get('/api/comments/:postId', async (req, res) => {
   const { postId } = req.params;
@@ -304,6 +491,9 @@ app.get('/api/comments/:postId', async (req, res) => {
        ORDER BY c.created_at ASC`,
       [postId]
     );
+    if (result.rows.length === 0) {
+      res.json([]);
+    }
     res.json(result.rows);
   } catch (err) {
     res.status(500).json({ error: 'Failed to fetch comments' });
@@ -311,22 +501,25 @@ app.get('/api/comments/:postId', async (req, res) => {
 });  
 
 app.delete('/api/comment/:id', async (req, res) => {
-  const { id } = req.params; // Get id from URL parameter
-//   console.error(id);
+  const { id } = req.params;
+
   try {
     const result = await pool.query(
       'DELETE FROM comments WHERE id = $1 RETURNING *',
       [id]
     );
+
     if (result.rows.length === 0) {
       return res.status(404).json({ error: 'Comment not found' });
     }
-    res.status(200).json({ message: 'Comment deleted' });
+
+    res.sendStatus(204);
   } catch (err) {
-    console.error(err);
+    console.error('Failed to delete comment:', err);
     res.status(500).json({ error: 'Failed to delete comment' });
   }
-});   
+});
+
 
 app.get('/', (req, res) => {
   res.send('DB ~');
