@@ -8,6 +8,20 @@ import { head } from "framer-motion/client";
 
 function App() {
 
+const decodeJwt = (token: string) => {
+  try {
+    const base64Url = token.split('.')[1];
+    const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+    const jsonPayload = decodeURIComponent(atob(base64).split('').map(function(c) {
+      return '%' + ('00' + c.charCodeAt(0).toString(16)).slice(-2);
+    }).join(''));
+    return JSON.parse(jsonPayload);
+  } catch (e) {
+    console.error("Error decoding JWT:", e);
+    return null;
+  }
+};
+
   type User = {
     id: number;
     name: string;
@@ -57,6 +71,9 @@ function App() {
   const [header, setHeader] = useState("");
   const [body, setBody] = useState("");
 
+  // Inside function App()
+  const [sessionError, setSessionError] = useState<string | null>(null);
+
   useEffect(() => {
     getPosts()
   }, []);
@@ -101,8 +118,20 @@ function App() {
     if (data.success) {
       localStorage.setItem('accessToken', data.accessToken);
       localStorage.setItem('refreshToken', data.refreshToken);
-      setLoggedInUser(data.user);
-      return data.user;
+      
+      const tokenPayload = decodeJwt(data.accessToken);
+      const exampleUser: User = {
+        id: tokenPayload.id,
+        name: tokenPayload.name,
+        email: tokenPayload.email,
+        privileges: tokenPayload.privileges,
+      };
+      if (tokenPayload){
+        return exampleUser;
+      }
+
+      // setLoggedInUser(data.user);
+      return null;
     } else {
       alert(data.message);
       return null;
@@ -131,9 +160,8 @@ function App() {
 
   const modUser = async (id) => {
     try {
-      const response = await fetch('https://db.weightedwalk.org/api/users/privileges', {
+      const response = await authFetch('https://db.weightedwalk.org/api/users/privileges', {
         method: 'PUT',
-        headers: getAuthHeaders(),
         body: JSON.stringify({ id, privileges: 1 }),
       });
       if (!response.ok) throw new Error('Failed to mod user');
@@ -147,9 +175,8 @@ function App() {
 
   const unmodUser = async (id) => {
     try {
-      const response = await fetch('https://db.weightedwalk.org/api/users/privileges', {
+      const response = await authFetch('https://db.weightedwalk.org/api/users/privileges', {
         method: 'PUT',
-        headers: getAuthHeaders(),
         body: JSON.stringify({ id, privileges: 0 }),
       });
       if (!response.ok) throw new Error('Failed to unmod user')
@@ -163,9 +190,8 @@ function App() {
 
   const banUser = async (id) => {
     try {
-      const response = await fetch(`https://db.weightedwalk.org/api/users/${id}`, {
+      const response = await authFetch(`https://db.weightedwalk.org/api/users/${id}`, {
         method: 'DELETE',
-        headers: getAuthHeaders(),
       });
       if (!response.ok) throw new Error('Failed to ban user')
       else{
@@ -178,9 +204,8 @@ function App() {
 
   const getUsers = async () => {
     try {
-      const res = await fetch('https://db.weightedwalk.org/api/users', {
+      const res = await authFetch('https://db.weightedwalk.org/api/users', {
         method: 'GET',
-        headers: getAuthHeaders(),
       });
       const data = await res.json();
       setUsers(data);
@@ -250,9 +275,8 @@ function App() {
 
   const postPost = async (title, content, posterId) => {
       try {
-        const response = await fetch('https://db.weightedwalk.org/api/post', {
+        const response = await authFetch('https://db.weightedwalk.org/api/post', {
           method: 'POST',
-          headers: getAuthHeaders(),
           body: JSON.stringify({ title, content, userId:posterId }),
         });
 
@@ -269,9 +293,8 @@ function App() {
 
   const deletePost = async (id) => {
     try {
-      const response = await fetch(`https://db.weightedwalk.org/api/post/${id}`, {
+      const response = await authFetch(`https://db.weightedwalk.org/api/post/${id}`, {
         method: 'DELETE',
-        headers: getAuthHeaders(),
       });
       const data = await response.json();
       if (response.ok) {
@@ -287,9 +310,8 @@ function App() {
 
   const deleteComment = async (id) =>{
     try {
-      const response = await fetch(`https://db.weightedwalk.org/api/comment/${id}`, {
+      const response = await authFetch(`https://db.weightedwalk.org/api/comment/${id}`, {
         method: 'DELETE',
-        headers: getAuthHeaders(),
       });
       const data = await response.json();
       if (response.ok) {
@@ -307,9 +329,8 @@ function App() {
   const updateUser = async (e) => {
     e.preventDefault();
     try {
-      const response = await fetch(`https://db.weightedwalk.org/api/users/${loggedInUser.id}`, {
+      const response = await authFetch(`https://db.weightedwalk.org/api/users/${loggedInUser.id}`, {
         method: 'PUT',
-        headers: getAuthHeaders(),
         body: JSON.stringify({ name, email, password }),
       });
       
@@ -341,9 +362,8 @@ function App() {
   const updateComment = async (e) =>{
     e.preventDefault();
     try {
-      const response = await fetch(`https://db.weightedwalk.org/api/comments/${editId}`, {
+      const response = await authFetch(`https://db.weightedwalk.org/api/comments/${editId}`, {
         method: 'PUT',
-        headers: getAuthHeaders(),
         body: JSON.stringify({ content: body }),
       });   
 
@@ -362,9 +382,8 @@ function App() {
   const updatePost = async (e) =>{
     e.preventDefault();
     try {
-      const response = await fetch(`https://db.weightedwalk.org/api/posts/${editId}`, {
+      const response = await authFetch(`https://db.weightedwalk.org/api/posts/${editId}`, {
         method: 'PUT',
-        headers: getAuthHeaders(),
         body: JSON.stringify({ title: header, content: body }),
       });   
 
@@ -383,9 +402,8 @@ function App() {
   const handleCommentSubmit = async (content, postId) => {
     console.log("id: ", postId);
     console.log("content: ", content);
-    await fetch('https://db.weightedwalk.org/api/comment', {
+    await authFetch('https://db.weightedwalk.org/api/comment', {
       method: 'POST',
-      headers: getAuthHeaders(),
       body: JSON.stringify({ content, postId, userId: loggedInUser.id }),
     });
   }
@@ -394,12 +412,82 @@ function App() {
     setLoggedInUser(undefined);
     localStorage.removeItem('accessToken');
     localStorage.removeItem('refreshToken');
+    setSessionError(null); // Clear error on manual logout
   }
+
+const refreshCurrentToken = async () => {
+    const refreshToken = localStorage.getItem('refreshToken');
+    if (!refreshToken) return null;
+
+    try {
+      const response = await fetch('https://db.weightedwalk.org/api/token/refresh', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refreshToken }),
+      });
+
+      const data = await response.json();
+      
+      if (data.success) {
+        console.log("Token refreshed successfully");
+        localStorage.setItem('accessToken', data.accessToken);
+        return data.accessToken;
+      }
+    } catch (err) {
+      console.error('Error refreshing token:', err);
+    }
+    return null;
+  };
+
+  // 2. The Wrapper Function
+  const authFetch = async (url: string, options: RequestInit = {}) => {
+    let token = localStorage.getItem('accessToken');
+    
+    // Prepare headers (merge existing options with auth headers)
+    const headers = {
+      'Content-Type': 'application/json',
+      ...(token && { 'Authorization': `Bearer ${token}` }),
+      ...options.headers as any, // Cast to any to avoid complex TS header types issues locally
+    };
+
+    // Attempt 1: Normal Request
+    let response = await fetch(url, { ...options, headers });
+
+    // Check if the token was invalid/expired (Your backend sends 403 for this)
+    if (response.status === 403) {
+      console.log("Access token expired (403). Attempting refresh...");
+      
+      const newToken = await refreshCurrentToken();
+
+      if (newToken) {
+        // Attempt 2: Retry with new token
+        const newHeaders = {
+          ...headers,
+          'Authorization': `Bearer ${newToken}`
+        };
+        
+        response = await fetch(url, { ...options, headers: newHeaders });
+      } else {
+        // Refresh failed (Refresh token expired or invalid)
+        handleLogout();
+        setSessionError("Your session has expired. Please log in again.");
+      }
+    }
+
+    return response;
+  };
+
 
   // loadAllComments()
   // console.log(new Date(posts[0].createDate)); // Should now be valid   
   return (
     <>
+      {sessionError && (
+        <div className="bg-red-500 text-white text-center p-2 sticky top-0 z-50">
+          {sessionError}
+          <button onClick={() => setSessionError(null)} className="ml-4 underline">Dismiss</button>
+        </div>
+      )}
       <header>
         <div className="text-right p-2">
 
@@ -1061,12 +1149,12 @@ function App() {
             </div>
           </article>
           <div className="hidden md:grid text-center h-200 p-5 grid grid-rows-6 ">
-            <h3 className="text-2xl text-white"><strong>Cards</strong></h3>
+            <h3 className="text-2xl text-white"><strong>Monsters</strong></h3>
             <div className="grid grid-cols-auto relative row-span-5">
               <Card name="Lupernix" imgsrc="" bio="" identifier={0}></Card>
               <Card name="Spiquida" imgsrc="" bio="" identifier={1}></Card>
-              <Card name="Ruperion" imgsrc="/src/assets/ruperion.png" bio="this one has chonk and the way he move those hips makes his foe fall head over heels" identifier={2}></Card>
-              <Card name="Nomax" imgsrc="/src/assets/nomax.png" bio="my boy got the flame inim fr fr where he spittin' noone livin'" identifier={3}></Card>
+              <Card name="Ruperion" imgsrc="/src/assets/ruperion.png" bio="rock type pokemon" identifier={2}></Card>
+              <Card name="Nomax" imgsrc="/src/assets/nomax.png" bio="this monster specializes in flames, shoots a lot of them and lives in them" identifier={3}></Card>
             </div>
           </div>
         </div>

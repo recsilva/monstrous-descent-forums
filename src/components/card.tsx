@@ -16,9 +16,9 @@ function card(props: cardProps) {
     };
 
     const rightMap: { [key: number]: string } = {
-        0: 'left-15',
-        1: 'left-5',
-        2: 'right-5',
+        0: 'right-9',
+        1: 'right-11',
+        2: 'right-13',
         3: 'right-15',
     };
 
@@ -28,13 +28,13 @@ function card(props: cardProps) {
     return (
         <motion.div
             whileHover={{
-                scale: 1.1,
+                scale: 1.05,
                 zIndex: 2,
             }}
             // className={`m-auto w-80 h-120 border-2 rounded-2xl absolute inset-x-0 ${top} ${right} shadow-lg/90 grid grid-rows-8
             // size-18 bg-radial-[at_25%_25%] from-red-200 to-indigo-900 to-90%`}>
-            className={`m-auto w-80 h-120 border-2 rounded-2xl absolute inset-x-0 ${top} ${right} shadow-lg/90 grid grid-rows-8
-        size-18 bg-radial-[at_25%_25%] from-green-900 to-black to-90%`}>
+            className={`m-auto w-80 h-120 border-5 border-gray-900 rounded-2xl absolute inset-x-0 ${top} ${right} shadow-lg/90 grid grid-rows-8
+        size-18 bg-radial-[at_25%_25%] from-gray-600 to-black to-90%`}>
             <div className="m-2 border-2 rounded-2xl bg-white shadow-lg/50">
                 <h3 className=' text-3xl '><strong>{props.name}</strong></h3>
             </div>

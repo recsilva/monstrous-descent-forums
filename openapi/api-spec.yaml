@@ -1,0 +1,698 @@
+openapi: 3.0.0
+info:
+  title: Express PostgreSQL Forum API
+  description: |
+    A RESTful API for a forum or blog application built with Node.js, Express, and PostgreSQL.
+    It includes full user authentication (register, login, refresh token), JWT-based access control,
+    and role-based authorization for users, posts, and comments.
+  version: 1.0.0
+servers:
+  - url: http://localhost:5000/api
+    description: Local Development Server
+tags:
+  - name: Authentication
+    description: User registration, login, and token refreshing
+  - name: Users
+    description: User account management and role administration (Admin/Moderator)
+  - name: Posts
+    description: CRUD operations for forum posts
+  - name: Comments
+    description: CRUD operations for post comments
+
+components:
+  securitySchemes:
+    AccessTokenAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: The JWT Access Token obtained from the /login endpoint.
+    RefreshTokenAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: The JWT Refresh Token, typically sent in the request body for /token/refresh.
+
+  schemas:
+    User:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: Unique user ID.
+          example: 1
+        name:
+          type: string
+          example: John Doe
+        email:
+          type: string
+          format: email
+          example: john.doe@example.com
+        privileges:
+          type: integer
+          description: User privilege level (0=USER, 1=MOD, 2=ADMIN).
+          enum: [0, 1, 2]
+          example: 0
+    Post:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: Unique post ID.
+          example: 101
+        title:
+          type: string
+          example: My First Post
+        content:
+          type: string
+          example: This is the content of my first post.
+        user_id:
+          type: integer
+          description: ID of the user who created the post.
+          example: 1
+        created_at:
+          type: string
+          format: date-time
+          example: "2023-11-20T10:00:00.000Z"
+    PostDetailed:
+      allOf:
+        - $ref: '#/components/schemas/Post'
+        - type: object
+          properties:
+            poster:
+              $ref: '#/components/schemas/User'
+            createDate:
+              type: string
+              format: date-time
+              description: Alias for created_at.
+              example: "2023-11-20T10:00:00.000Z"
+
+    Comment:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: Unique comment ID.
+          example: 501
+        content:
+          type: string
+          example: Great post!
+        post_id:
+          type: integer
+          description: ID of the post the comment belongs to.
+          example: 101
+        user_id:
+          type: integer
+          description: ID of the user who created the comment.
+          example: 2
+        created_at:
+          type: string
+          format: date-time
+          example: "2023-11-20T10:05:00.000Z"
+
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+          example: Invalid credentials
+
+  responses:
+    UnauthorizedError:
+      description: Authentication token is required or missing.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+            example: { error: "Authentication token required" }
+    ForbiddenError:
+      description: Token is invalid, expired, or user has insufficient privileges.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+            example: { error: "Access denied. Insufficient privileges." }
+    NotFound:
+      description: The requested resource was not found.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+            example: { error: "User not found" }
+    Conflict:
+      description: Resource already exists (e.g., email in use).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+            example: { error: "User already exists" }
+    InternalServerError:
+      description: Internal server error.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+            example: { error: "Failed to register user" }
+    NoContent:
+      description: Resource deleted successfully (No Content).
+      
+paths:
+  /register:
+    post:
+      tags:
+        - Authentication
+      summary: Register a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, email, password]
+              properties:
+                name: { type: string, example: New User }
+                email: { type: string, format: email, example: new.user@example.com }
+                password: { type: string, example: mysecurepassword }
+      responses:
+        '201':
+          description: User created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: User created successfully }
+                  user:
+                    $ref: '#/components/schemas/User'
+        '400':
+          description: Invalid input (missing fields, invalid email, weak password)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /login:
+    post:
+      tags:
+        - Authentication
+      summary: Authenticate and log in a user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email: { type: string, format: email, example: john.doe@example.com }
+                password: { type: string, example: mysecurepassword }
+      responses:
+        '200':
+          description: Authentication successful, returns tokens and user info.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  message: { type: string, example: Authentication successful }
+                  accessToken: { type: string, description: JWT Access Token (short-lived) }
+                  refreshToken: { type: string, description: JWT Refresh Token (long-lived) }
+                  user:
+                    type: object
+                    properties:
+                      id: { type: integer, example: 1 }
+                      name: { type: string, example: John Doe }
+        '401':
+          description: Invalid email or password.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+                example: { success: false, message: "Invalid email or password" }
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /token/refresh:
+    post:
+      tags:
+        - Authentication
+      summary: Refresh an expired Access Token using a valid Refresh Token
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [refreshToken]
+              properties:
+                refreshToken: { type: string, description: The valid Refresh Token. }
+      responses:
+        '200':
+          description: New Access Token granted.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  accessToken: { type: string, description: New JWT Access Token. }
+                  message: { type: string, example: New Access Token granted. }
+        '401':
+          description: Refresh Token required.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+                example: { error: "Refresh Token required" }
+        '403':
+          description: Invalid, revoked, or expired Refresh Token.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+                example: { error: "Invalid, revoked, or expired Refresh Token." }
+
+  /users/privileges:
+    put:
+      tags:
+        - Users
+      summary: Update a user's privilege level (Admin required)
+      security:
+        - AccessTokenAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [id, privileges]
+              properties:
+                id: { type: integer, description: User ID to modify. }
+                privileges: { type: integer, description: New privilege level (0, 1, or 2). }
+      responses:
+        '200':
+          description: Privileges updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+                  message: { type: string, example: Privileges updated successfully }
+                  user:
+                    type: object
+                    properties:
+                      id: { type: integer, example: 2 }
+                      privileges: { type: integer, example: 1 }
+        '400':
+          description: Missing ID or privileges.
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /users:
+    get:
+      tags:
+        - Users
+      summary: View all users (Admin required)
+      security:
+        - AccessTokenAuth: []
+      responses:
+        '200':
+          description: List of all users.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          $ref: '#/components/responses/ForbiddenError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /users/{id}:
+    put:
+      tags:
+        - Users
+      summary: Update user details (Self or Admin required)
+      description: Allows a user to update their own account, or an Admin to update any account.
+      security:
+        - AccessTokenAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+          description: ID of the user to update.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name: { type: string, example: New Name }
+                email: { type: string, format: email, example: new.email@example.com }
+                password: { type: string, example: newsecurepassword }
+      responses:
+        '200':
+          description: User updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: User updated successfully }
+                  user:
+                    $ref: '#/components/schemas/User'
+        '400':
+          description: Invalid input (e.g., no fields provided, invalid email format).
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Access denied. Must be self or Admin.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          description: Email already in use.
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    delete:
+      tags:
+        - Users
+      summary: Delete/ban a user (Moderator or Admin required)
+      description: |
+        Moderators can delete/ban regular users (privileges < Admin). 
+        Admins can delete/ban any user, but a user cannot delete their own account via this endpoint.
+      security:
+        - AccessTokenAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+          description: ID of the user to delete/ban.
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Insufficient privileges (e.g., Mod trying to delete Admin) or attempting to delete own account.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+          
+  /post:
+    post:
+      tags:
+        - Posts
+      summary: Create a new post (Login required)
+      security:
+        - AccessTokenAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [title, content]
+              properties:
+                title: { type: string, example: A New Post }
+                content: { type: string, example: The amazing content of my new article. }
+      responses:
+        '201':
+          description: Post created successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: Post created successfully }
+                  post:
+                    $ref: '#/components/schemas/Post'
+        '400':
+          description: Missing title/content or invalid user_id.
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+          
+  /posts:
+    get:
+      tags:
+        - Posts
+      summary: View all posts
+      responses:
+        '200':
+          description: A list of all forum posts.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/PostDetailed'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+          
+  /posts/{id}:
+    get:
+      tags:
+        - Posts
+      summary: View a single post
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+          description: ID of the post to retrieve.
+      responses:
+        '200':
+          description: The requested post details.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PostDetailed'
+        '404':
+          description: Post not found.
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    put:
+      tags:
+        - Posts
+      summary: Update a post (Owner or Admin required)
+      security:
+        - AccessTokenAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+          description: ID of the post to update.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                title: { type: string, example: An Updated Title }
+                content: { type: string, example: The new updated content. }
+      responses:
+        '200':
+          description: Post updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: Post updated successfully }
+                  post:
+                    $ref: '#/components/schemas/Post'
+        '400':
+          description: Missing title/content or invalid length.
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Access denied. Not the post owner or Admin.
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    delete:
+      tags:
+        - Posts
+      summary: Delete a post (Owner or Admin required)
+      security:
+        - AccessTokenAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+          description: ID of the post to delete.
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Access denied. Not the post owner or Admin.
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /comment:
+    post:
+      tags:
+        - Comments
+      summary: Create a new comment (Login required)
+      security:
+        - AccessTokenAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content, postId]
+              properties:
+                content: { type: string, example: My comment on this post. }
+                postId: { type: integer, description: The ID of the post to comment on. }
+      responses:
+        '201':
+          description: Comment created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Comment'
+        '400':
+          description: Missing content or postId.
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '404':
+          description: Post not found.
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /comments/{postId}:
+    get:
+      tags:
+        - Comments
+      summary: Get all comments for a specific post
+      parameters:
+        - name: postId
+          in: path
+          required: true
+          schema: { type: integer }
+          description: ID of the post whose comments to retrieve.
+      responses:
+        '200':
+          description: A list of comments for the specified post.
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  allOf:
+                    - $ref: '#/components/schemas/Comment'
+                    - type: object
+                      properties:
+                        name: { type: string, example: Commenter Name }
+                        email: { type: string, example: commenter@example.com }
+                        privileges: { type: integer, example: 0 }
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+  /comments/{id}:
+    put:
+      tags:
+        - Comments
+      summary: Update a comment (Owner or Admin required)
+      security:
+        - AccessTokenAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+          description: ID of the comment to update.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [content]
+              properties:
+                content: { type: string, example: My updated comment. }
+      responses:
+        '200':
+          description: Comment updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message: { type: string, example: Comment updated successfully }
+                  comment:
+                    $ref: '#/components/schemas/Comment'
+        '400':
+          description: Invalid content provided.
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Access denied. Not the comment owner or Admin.
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'
+
+    delete:
+      tags:
+        - Comments
+      summary: Delete a comment (Owner or Admin required)
+      security:
+        - AccessTokenAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: integer }
+          description: ID of the comment to delete.
+      responses:
+        '204':
+          $ref: '#/components/responses/NoContent'
+        '401':
+          $ref: '#/components/responses/UnauthorizedError'
+        '403':
+          description: Access denied. Not the comment owner or Admin.
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '500':
+          $ref: '#/components/responses/InternalServerError'

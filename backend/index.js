@@ -48,7 +48,7 @@ const authenticateToken = (req, res, next) => {
 // --- AUTHORIZATION MIDDLEWARE (Role Check) ---
 const authorizePrivilege = (requiredLevel) => (req, res, next) => {
     // req.user.role is the privileges integer (0, 1, or 2)
-    if (!req.user || req.user.role < requiredLevel) {
+    if (!req.user || req.user.privileges < requiredLevel) {
         // 403 Forbidden: User is authenticated but does not meet the minimum privilege level
         return res.status(403).json({ error: 'Access denied. Insufficient privileges.' });
     }
@@ -135,26 +135,22 @@ app.post('/api/login', async (req, res) => {
       return res.status(401).json({ success: false, message: 'Invalid email or password' });
     }
 
-    const payload = {
-      id: user.id,
-      email: user.email,
-      role: user.privileges
+    // --- Get the privilege level and include it in the payload ---
+    const payload = { 
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        privileges: user.privileges 
     };
 
-
-    const accessToken = jwt.sign(
-      payload,
-      JWT_SECRET,
-      {
-        expiresIn: '20s'
-      }
-    )
+    // Sign the Access Token
+    const accessToken = jwt.sign(payload, JWT_SECRET, { expiresIn: '20s' })
 
     const refreshToken = jwt.sign(
       payload,
       REFRESH_SECRET,
       {
-        expiresIn: '7d'
+        expiresIn: '1min'
       }
     );
 
@@ -216,10 +212,17 @@ app.post('/api/token/refresh', async (req, res) => {
     
     const user = userResult.rows[0];
 
+    const payload = { 
+        id: user.id,
+        name: user.name,
+        email: user.email,
+        privileges: user.privileges 
+    };
+
     const newAccessToken = jwt.sign(
-        { id: user.id, email: user.email, role: user.privileges },
+        payload,
         JWT_SECRET,
-        { expiresIn: '15m' }
+        { expiresIn: '10sec' }
     );
 
     return res.status(200).json({
